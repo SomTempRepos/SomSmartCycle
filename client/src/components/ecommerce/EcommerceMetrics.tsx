@@ -34,18 +34,45 @@ interface BikeData {
   };
 }
 
+interface LocationHistory {
+  lat: number;
+  lng: number;
+  timestamp: string;
+}
+
+// Function to calculate distance between two points using Haversine formula
+function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng/2) * Math.sin(dLng/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c; // Distance in kilometers
+}
+
 export default function EcommerceMetrics({ cardTitles }: EcommerceMetricsProps) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [latestData, setLatestData] = useState<BikeData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [locationHistory, setLocationHistory] = useState<LocationHistory[]>([]);
+  const [totalCalculatedDistance, setTotalCalculatedDistance] = useState<number>(0);
+  const [baseLocation, setBaseLocation] = useState<{ lat: number; lng: number }>({
+    lat: 19.0760, // Default Mumbai coordinates
+    lng: 72.8777
+  });
+  const [distanceFromBase, setDistanceFromBase] = useState<number>(0);
+  
   const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL;
 
   const titles = cardTitles || [
     "Current Speed",
     "Total Distance",
     "Battery",
-    "Current Location"
+    "Distance from Base"
   ];
 
   useEffect(() => {
@@ -81,7 +108,53 @@ export default function EcommerceMetrics({ cardTitles }: EcommerceMetricsProps) 
 
       newSocket.on("bikeData", (data: BikeData) => {
         console.log("Received bike data via WebSocket:", data);
-        if (data && data.data) {
+        if (data && data.data && data.data.location) {
+          // Calculate distance from base location
+          const distanceFromBaseCalc = calculateDistance(
+            baseLocation.lat,
+            baseLocation.lng,
+            data.data.location.lat,
+            data.data.location.lng
+          );
+          setDistanceFromBase(distanceFromBaseCalc);
+
+          // Update location history and calculate total distance
+          setLocationHistory(prevHistory => {
+            const newHistory = [...prevHistory];
+            const newLocation: LocationHistory = {
+              lat: data.data.location.lat,
+              lng: data.data.location.lng,
+              timestamp: data.timestamp
+            };
+
+            // Calculate distance from last location if we have previous data
+            if (newHistory.length > 0) {
+              const lastLocation = newHistory[newHistory.length - 1];
+              const distanceFromLast = calculateDistance(
+                lastLocation.lat,
+                lastLocation.lng,
+                newLocation.lat,
+                newLocation.lng
+              );
+              
+              // Only add distance if it's significant (> 0.001 km = 1 meter)
+              // This helps filter out GPS noise
+              if (distanceFromLast > 0.001) {
+                setTotalCalculatedDistance(prev => prev + distanceFromLast);
+              }
+            }
+
+            // Add new location to history
+            newHistory.push(newLocation);
+
+            // Keep only last 100 locations to prevent memory issues
+            if (newHistory.length > 100) {
+              newHistory.shift();
+            }
+
+            return newHistory;
+          });
+
           setLatestData(data);
           setError(null);
         }
@@ -99,7 +172,7 @@ export default function EcommerceMetrics({ cardTitles }: EcommerceMetricsProps) 
         newSocket.close();
       }
     };
-  }, []);
+  }, [baseLocation]);
 
   const formatSpeed = (speed: number) => {
     return `${speed.toFixed(1)} km/h`;
@@ -109,149 +182,161 @@ export default function EcommerceMetrics({ cardTitles }: EcommerceMetricsProps) 
     return `${distance.toFixed(2)} km`;
   };
 
+  const resetDistance = () => {
+    setTotalCalculatedDistance(0);
+    setLocationHistory([]);
+  };
+
+  const updateBaseLocation = (lat: number, lng: number) => {
+    setBaseLocation({ lat, lng });
+  };
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      {error && (
-        <div className="col-span-4 p-4 text-red-500 bg-red-100 rounded-lg dark:bg-red-900/20">
-          {error}
+    <div className="space-y-4">
+      
+
+      {/* Metrics Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {error && (
+          <div className="col-span-4 p-4 text-red-500 bg-red-100 rounded-lg dark:bg-red-900/20">
+            {error}
+          </div>
+        )}
+        
+        {/* Speed Metric */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
+          {cardTitles ? (
+            <>
+              <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[0]}</span>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
+                <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
+                <BoltIcon className="text-gray-800 size-6 dark:text-white/90" />
+              </div>
+              <div className="flex items-end justify-between mt-5 w-full">
+                <div>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">{titles[0]}</span>
+                  <h4 className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
+                    {latestData?.data?.avgSpeed ? formatSpeed(latestData.data.avgSpeed) : "0.0 km/h"}
+                  </h4>
+                </div>
+                <Badge color={isConnected ? "success" : "error"}>
+                  {isConnected ? <ArrowUpIcon /> : <ArrowDownIcon />}
+                  {isConnected ? "Live" : "Offline"}
+                </Badge>
+              </div>
+            </>
+          )}
         </div>
-      )}
-      {/* <!-- Speed Metric Start --> */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
-        {cardTitles ? (
-          <>
-            <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[0]}</span>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
-              <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
-              <BoltIcon className="text-gray-800 size-6 dark:text-white/90" />
-            </div>
-            <div className="flex items-end justify-between mt-5 w-full">
-              <div>
-                <span className="text-sm text-gray-500 dark:text-gray-400">{titles[0]}</span>
-                <h4 className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
-                  {latestData?.data?.avgSpeed ? formatSpeed(latestData.data.avgSpeed) : "0.0 km/h"}
-                </h4>
-              </div>
-              <Badge color={isConnected ? "success" : "error"}>
-                {isConnected ? <ArrowUpIcon /> : <ArrowDownIcon />}
-                {isConnected ? "Live" : "Offline"}
-              </Badge>
-            </div>
-          </>
-        )}
-      </div>
-      {/* <!-- Speed Metric End --> */}
 
-      {/* <!-- Distance Metric Start --> */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
-        {cardTitles ? (
-          <>
-            <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[1]}</span>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
-              <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
-              <BoxIconLine className="text-gray-800 size-6 dark:text-white/90" />
-            </div>
-            <div className="flex items-end justify-between mt-5 w-full">
-              <div>
-                <span className="text-sm text-gray-500 dark:text-gray-400">{titles[1]}</span>
-                <h4 className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
-                  {latestData?.data?.distance ? formatDistance(latestData.data.distance) : "0.00 km"}
-                </h4>
+        {/* Total Distance Metric (Calculated) */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
+          {cardTitles ? (
+            <>
+              <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[1]}</span>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
+                <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
               </div>
-              <Badge color="success">
-                <ArrowUpIcon />
-                {latestData ? "Active" : "Idle"}
-              </Badge>
-            </div>
-          </>
-        )}
-      </div>
-      {/* <!-- Distance Metric End --> */}
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
+                <BoxIconLine className="text-gray-800 size-6 dark:text-white/90" />
+              </div>
+              <div className="flex items-end justify-between mt-5 w-full">
+                <div>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">{titles[1]}</span>
+                  <h4 className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
+                    {formatDistance(totalCalculatedDistance)}
+                  </h4>
+                </div>
+                <Badge color="success">
+                  <ArrowUpIcon />
+                  {latestData ? "Active" : "Idle"}
+                </Badge>
+              </div>
+            </>
+          )}
+        </div>
 
-      {/* <!-- Battery Metric Start (was 2nd Distance) --> */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
-        {cardTitles ? (
-          <>
-            <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[2]}</span>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
-              <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
-              <BoltIcon className="text-yellow-500 size-6 dark:text-yellow-400" />
-            </div>
-            <div className="flex items-end justify-between mt-5 w-full">
-              <div>
-                <span className="text-sm text-gray-500 dark:text-gray-400">{titles[2]}</span>
-                <h4 className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
-                  {typeof latestData?.data?.battery === 'number' ? `${latestData.data.battery}%` : "--%"}
-                </h4>
+        {/* Battery Metric */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
+          {cardTitles ? (
+            <>
+              <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[2]}</span>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
+                <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
               </div>
-              <Badge color={isConnected ? "success" : "error"}>
-                {isConnected ? "Connected" : "Disconnected"}
-              </Badge>
-            </div>
-          </>
-        )}
-      </div>
-      {/* <!-- Battery Metric End --> */}
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
+                <BoltIcon className="text-yellow-500 size-6 dark:text-yellow-400" />
+              </div>
+              <div className="flex items-end justify-between mt-5 w-full">
+                <div>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">{titles[2]}</span>
+                  <h4 className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
+                    {typeof latestData?.data?.battery === 'number' ? `${latestData.data.battery}%` : "--%"}
+                  </h4>
+                </div>
+                <Badge color={isConnected ? "success" : "error"}>
+                  {isConnected ? "Connected" : "Disconnected"}
+                </Badge>
+              </div>
+            </>
+          )}
+        </div>
 
-      {/* <!-- Third Distance Metric Start --> */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
-        {cardTitles ? (
-          <>
-            <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[3]}</span>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
-              <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
-              <PaperPlaneIcon className="text-blue-500 size-6 dark:text-blue-400" />
-            </div>
-            <div className="flex items-end justify-between mt-5 w-full">
-              <div className="flex flex-col">
-                <span className="text-sm text-gray-500 dark:text-gray-400 mb-1">{titles[3]}</span>
-                <span className="mt-2 font-semibold text-gray-800 text-xs dark:text-white/90">
-                  Lat: {latestData?.data?.location?.lat !== undefined ? latestData.data.location.lat.toFixed(6) : '--'}
-                </span>
-                <span className="mt-1 font-semibold text-gray-800 text-xs dark:text-white/90">
-                  Lng: {latestData?.data?.location?.lng !== undefined ? latestData.data.location.lng.toFixed(6) : '--'}
-                </span>
+        {/* Distance from Base Metric */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-white/[0.03] md:p-6 flex flex-col items-center">
+          {cardTitles ? (
+            <>
+              <span className="text-sm text-gray-500 dark:text-gray-400 font-semibold text-center mb-2">{titles[3]}</span>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800 mb-2">
+                <BoxIcon className="text-gray-800 size-6 dark:text-white/90" />
               </div>
-              {latestData?.data?.location?.lat !== undefined && latestData?.data?.location?.lng !== undefined && (
-                <span
-                  className="cursor-pointer select-none"
-                  onClick={() => {
-                    const lat = latestData.data.location.lat;
-                    const lng = latestData.data.location.lng;
-                    const url = `https://www.google.com/maps?q=${lat},${lng}`;
-                    window.open(url, '_blank');
-                  }}
-                >
-                  <Badge color="info">
-                    Locate
-                  </Badge>
-                </span>
-              )}
-            </div>
-          </>
-        )}
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-center w-12 h-12 bg-gray-100 rounded-xl dark:bg-gray-800">
+                <PaperPlaneIcon className="text-blue-500 size-6 dark:text-blue-400" />
+              </div>
+              <div className="flex items-end justify-between mt-5 w-full">
+                <div className="flex flex-col">
+                  <span className="text-sm text-gray-500 dark:text-gray-400 mb-1">{titles[3]}</span>
+                  <span className="mt-2 font-bold text-gray-800 text-title-sm dark:text-white/90">
+                    {formatDistance(distanceFromBase)}
+                  </span>
+                  <div className="mt-1 text-xs text-gray-400">
+                    <div>Lat: {latestData?.data?.location?.lat !== undefined ? latestData.data.location.lat.toFixed(6) : '--'}</div>
+                    <div>Lng: {latestData?.data?.location?.lng !== undefined ? latestData.data.location.lng.toFixed(6) : '--'}</div>
+                  </div>
+                </div>
+                {latestData?.data?.location?.lat !== undefined && latestData?.data?.location?.lng !== undefined && (
+                  <span
+                    className="cursor-pointer select-none"
+                    onClick={() => {
+                      const lat = latestData.data.location.lat;
+                      const lng = latestData.data.location.lng;
+                      const url = `https://www.google.com/maps?q=${lat},${lng}`;
+                      window.open(url, '_blank');
+                    }}
+                  >
+                    <Badge color="info">
+                      Locate
+                    </Badge>
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
-      {/* <!-- Third Distance Metric End --> */}
     </div>
   );
 }

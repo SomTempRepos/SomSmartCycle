@@ -2,7 +2,7 @@ const axios = require('axios');
 
 // Get server URL from command line argument or environment variable
 // Default to your current setup but allow flexibility
-const SERVER_URL = 'https://somsmartcycle.onrender.com';
+const SERVER_URL = 'http://10.164.115.186';
 const INTERVAL_MS = 5000;
 
 // Define 1 bike with realistic bicycle speed
