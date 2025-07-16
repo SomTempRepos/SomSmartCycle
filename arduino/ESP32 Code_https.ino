@@ -1,0 +1,201 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <esp_random.h>
+
+// WiFi credentials - UPDATE THESE
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+// Server configuration
+const char* serverURL = "https://somsmartcycle.onrender.com";
+const int intervalMS = 5000;
+
+// Bike configuration
+const char* bikeId = "BIKE001";
+const float baseLat = 19.0760;  // Mumbai
+const float baseLng = 72.8777;
+const float minSpeed = 12.0;
+const float maxSpeed = 28.0;
+const float locationOffset = 0.005;
+
+// Battery and send counter logic
+int battery = 70;
+int sendCount = 0;
+unsigned long lastBatteryUpdate = 0;
+
+// Function to generate random float within range
+float randomFloat(float min, float max) {
+  return min + (float)esp_random() / (float)UINT32_MAX * (max - min);
+}
+
+// Function to get current timestamp (simplified)
+String getCurrentTimestamp() {
+  return String(millis());
+}
+
+// Function to generate bike data
+void generateBikeData(float& avgSpeed, float& lat, float& lng, int& batteryLevel) {
+  avgSpeed = randomFloat(minSpeed, maxSpeed);
+  lat = baseLat + (randomFloat(0, 1) - 0.5) * locationOffset;
+  lng = baseLng + (randomFloat(0, 1) - 0.5) * locationOffset;
+  batteryLevel = battery;
+}
+
+// Function to send data to server
+bool sendBikeData() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected");
+    return false;
+  }
+
+  HTTPClient http;
+  http.begin(String(serverURL) + "/api/bike/data");
+  http.addHeader("Content-Type", "application/json");
+
+  // Generate bike data
+  float avgSpeed, lat, lng;
+  int batteryLevel;
+  generateBikeData(avgSpeed, lat, lng, batteryLevel);
+
+  // Create JSON payload
+  StaticJsonDocument<300> doc;
+  doc["bikeId"] = bikeId;
+  
+  JsonObject data = doc.createNestedObject("data");
+  data["avgSpeed"] = round(avgSpeed * 100) / 100.0; // Round to 2 decimal places
+  
+  JsonObject location = data.createNestedObject("location");
+  location["lat"] = lat;
+  location["lng"] = lng;
+  
+  data["battery"] = batteryLevel;
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  // Send POST request
+  int httpResponseCode = http.POST(jsonString);
+  
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.printf("[✓] %s - Status: %d | Battery: %d%%\n", bikeId, httpResponseCode, battery);
+    Serial.printf("Speed: %.2f km/h | Lat: %.6f | Lng: %.6f\n", avgSpeed, lat, lng);
+    http.end();
+    return true;
+  } else {
+    Serial.printf("[x] Error sending data for %s: %d\n", bikeId, httpResponseCode);
+    http.end();
+    return false;
+  }
+}
+
+// Function to check server health
+bool checkServerHealth() {
+  HTTPClient http;
+  http.begin(String(serverURL) + "/health");
+  
+  int httpResponseCode = http.GET();
+  
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println("Server health: " + response);
+    http.end();
+    return true;
+  } else {
+    Serial.printf("Server health check failed: %d\n", httpResponseCode);
+    http.end();
+    return false;
+  }
+}
+
+// Function to connect to WiFi
+void connectToWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  
+  Serial.println();
+  Serial.println("WiFi connected!");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// Function to send bike data and update battery
+void sendBikeDataOnce() {
+  unsigned long currentTime = millis();
+  
+  Serial.println("\n🔄 Sending data for bike at " + getCurrentTimestamp());
+  
+  if (sendBikeData()) {
+    sendCount++;
+    
+    // Battery logic: decrease after every 5 sends or 30 seconds
+    if (sendCount >= 5 || (currentTime - lastBatteryUpdate) >= 30000) {
+      battery--;
+      sendCount = 0;
+      lastBatteryUpdate = currentTime;
+      
+      if (battery < 30) {
+        battery = 70;
+        Serial.println("🔋 Battery reset to 70%");
+      }
+    }
+    
+    Serial.println("✅ Bike data sent successfully\n");
+  } else {
+    Serial.println("❌ Failed to send bike data\n");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("🚴 ESP32 Bike Simulator started...");
+  Serial.println("Target server: " + String(serverURL));
+  Serial.println("Bike being simulated: " + String(bikeId));
+  
+  // Connect to WiFi
+  connectToWiFi();
+  
+  // Check server health
+  Serial.println("\nChecking server health...");
+  if (checkServerHealth()) {
+    Serial.println("Connected to server. Starting bike data transmission...");
+    Serial.println("Interval: " + String(intervalMS) + "ms");
+    
+    // Send initial data
+    sendBikeDataOnce();
+    lastBatteryUpdate = millis();
+  } else {
+    Serial.println("Server is not running. Please check the server URL and connection.");
+    Serial.println("Retrying in 10 seconds...");
+    delay(10000);
+    ESP.restart();
+  }
+}
+
+void loop() {
+  // Check WiFi connection
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi connection lost. Reconnecting...");
+    connectToWiFi();
+  }
+  
+  // Send bike data at regular intervals
+  static unsigned long lastSendTime = 0;
+  unsigned long currentTime = millis();
+  
+  if (currentTime - lastSendTime >= intervalMS) {
+    sendBikeDataOnce();
+    lastSendTime = currentTime;
+  }
+  
+  // Small delay to prevent watchdog issues
+  delay(100);
+}

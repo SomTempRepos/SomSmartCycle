@@ -104,7 +104,7 @@ const BikeTrackingMap: React.FC = () => {
   // Initialize socket connection
   useEffect(() => {
     // Replace with your server URL
-    const SERVER_URL = 'http://localhost:3001';
+    const SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL;
     
     socketRef.current = io(SERVER_URL, {
       transports: ['websocket'],

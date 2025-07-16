@@ -132,7 +132,7 @@ export default function GeoFencing(): JSX.Element {
   useEffect(() => {
     if (!trackingEnabled) return;
     
-    const SERVER_URL = 'http://localhost:3001';
+    const SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL;
     
     socketRef.current = io(SERVER_URL, {
       transports: ['websocket'],
